@@ -271,6 +271,8 @@
 
         const classesLen = 4;
         const coolOffTime = 1.5;
+        const T1 = 0.02;
+        const max_size_increase = 25;
         
 
 
@@ -290,7 +292,8 @@
         function changeSizes(cca_array){
             console.log(cca_array)
             for (let i = 0; i < cca_array.length; i++) {
-                brainButtons[i].style.fontSize = `${90 + Math.min(cca_array[i], 0.04) / 0.04 * 25}px`;
+                //brainButtons[i].style.fontSize = `${90 + Math.min(cca_array[i], 0.04) / 0.04 * 25}px`;
+                brainButtons[i].style.fontSize = `${90 + Math.min(max_size_increase,(cca_array[i]**2*max_size_increase)/T1**2)}px`;
             }
         }
       
