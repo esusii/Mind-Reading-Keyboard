@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flashing Squares with Prerendered Buffers and FPS Counter</title>
+    <style>
+        canvas {
+            display: block;
+            margin: 0;
+            color: rgb(0, 0, 0);
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+        .label {
+            position: absolute;
+            color: transparent;
+            opacity: 50%;
+            padding: 5px;
+            font-family: Arial, sans-serif;
+            text-align: center;
+            height: 35%;
+            width: 33%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 90px; 
+            font-weight: bold;
+            letter-spacing: 5px;
+            background: linear-gradient(to top, rgb(162, 212, 0) 50%, #FFF 50%);
+            background-clip: text;
+            -webkit-background-clip: text;
+            background-size: 100% 200%;
+            background-position: top;
+            transition: color 0.2s, background-position 1s linear, text-shadow 0.3s, font-size 0.2s, opacity 0.2s, background-color 0.2s;
+        }
+        .label.preTriggered {
+            background-position: bottom;
+            opacity: 100%;
+        }
+        .label.triggered {
+            opacity: 100%;
+            background-position: top;
+            color: rgb(95, 255, 95);
+            animation: glow 0.5s ease-in-out;
+        }
+        @keyframes glow {
+            0% {
+                text-shadow: 0px 0px 5px rgb(0, 212, 0, 0), 0px 0px 5px  rgb(0, 212, 0, 0), 0px 0px 5px  rgb(0, 212, 0, 0);
+            }
+            10% {
+                text-shadow: 0px 0px 10px rgb(0, 212, 0, 0), 0px 0px 10px  rgb(0, 212, 0, 0), 0px 0px 10px  rgb(0, 212, 0);
+            }
+            50% {
+                text-shadow: 0px 0px 20px rgb(0, 212, 0), 0px 0px 20px  rgb(0, 212, 0), 0px 0px 20px  rgb(0, 212, 0);
+            }
+            100% {
+                text-shadow: 0px 0px 100px rgb(0, 212, 0, 0), 0px 0px 100px  rgb(0, 212, 0, 0), 0px 0px 100px  rgb(0, 212, 0, 0);
+            }
+        }
+        #fpsCounter {
+            position: fixed;
+            top: 10px;
+            left: 50%;
+            color: white;
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 5px;
+            font-family: Arial, sans-serif;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="glCanvas"></canvas>
+    <div id="fpsCounter">FPS: 0</div>
+    <div id="brainButton1" class="label" style="bottom: 0; left: 0;">EAT</div>
+    <div id="brainButton2" class="label" style="bottom: 0; right: 0;">SLEEP</div>
+    <div id="brainButton3" class="label" style="top: 0; left: 0;">CODE</div>
+    <div id="brainButton4" class="label" style="top: 0; right: 0;">CRY</div>
+    <script>
+        const vsSource = `
+            attribute vec4 aVertexPosition;
+            attribute vec4 aColor;
+            varying vec4 vColor;
+            void main() {
+                gl_Position = aVertexPosition;
+                vColor = aColor;
+            }
+        `;
+
+        const fsSource = `
+            precision mediump float;
+            varying vec4 vColor;
+            void main() {
+                gl_FragColor = vColor;
+            }
+        `;
+
+        let gl;
+        let programInfo;
+        let buffers;
+        let then = 0;
+        const frequencies = [7, 8.7, 9.8, 12]; // LCM = 17052
+        const frameRate = 120; // Assuming 60 FPS
+        const totalFrames = 17052;
+        let currentFrame = 0;
+
+        // FPS calculation variables
+        let frameCount = 0;
+        let lastFpsUpdate = 0;
+        const fpsUpdateInterval = 1000; // Update FPS every second
+
+        function initGL() {
+            const canvas = document.getElementById('glCanvas');
+            gl = canvas.getContext('webgl');
+
+            if (!gl) {
+                console.error('Unable to initialize WebGL. Your browser may not support it.');
+                return;
+            }
+
+            const shaderProgram = initShaderProgram(gl, vsSource, fsSource);
+
+            programInfo = {
+                program: shaderProgram,
+                attribLocations: {
+                    vertexPosition: gl.getAttribLocation(shaderProgram, 'aVertexPosition'),
+                    color: gl.getAttribLocation(shaderProgram, 'aColor'),
+                },
+            };
+
+            buffers = initBuffers(gl);
+
+            requestAnimationFrame(render);
+            // positionLabels();
+        }
+
+        function initBuffers(gl) {
+            const positionBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+
+            const positions = [
+                -1.0,  1.0,
+                 1.0,  1.0,
+                -1.0, -1.0,
+                 1.0, -1.0,
+            ];
+
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
+
+            const colorBuffers = frequencies.map((freq, index) => {
+                const colorBuffer = gl.createBuffer();
+                gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
+                
+                const colors = new Float32Array(totalFrames * 16); // 4 vertices * 4 color components
+                
+                const baseColors = [
+                    [0.5, 0.5, 0.5], // Gray for all frequencies
+                    [0.5, 0.5, 0.5],
+                    [0.5, 0.5, 0.5],
+                    [0.5, 0.5, 0.5],
+                ];
+
+                const initialPhases = [
+                    0,       // Initial phase for 7 Hz
+                    Math.PI / 2, // Initial phase for 8.7 Hz
+                    Math.PI,  // Initial phase for 9.8 Hz
+                    3 * Math.PI / 2 // Initial phase for 12 Hz
+                ];
+
+                for (let i = 0; i < totalFrames; i++) {
+                    const t = i / frameRate;
+                    const intensity = Math.sin(2 * Math.PI * freq * t + initialPhases[index]) * 0.5 + 0.5;
+                    const gray = 0.5 * intensity; // Scale gray intensity
+                    for (let j = 0; j < 4; j++) {
+                        colors[i * 16 + j * 4] = gray;
+                        colors[i * 16 + j * 4 + 1] = gray;
+                        colors[i * 16 + j * 4 + 2] = gray;
+                        colors[i * 16 + j * 4 + 3] = 1.0;
+                    }
+                }
+
+                gl.bufferData(gl.ARRAY_BUFFER, colors, gl.STATIC_DRAW);
+                return colorBuffer;
+            });
+
+            return {
+                position: positionBuffer,
+                colors: colorBuffers,
+            };
+        }
+
+        function drawSquare(gl, programInfo, buffers, colorBufferIndex, x, y, w, h) {
+            gl.bindBuffer(gl.ARRAY_BUFFER, buffers.position);
+            gl.vertexAttribPointer(programInfo.attribLocations.vertexPosition, 2, gl.FLOAT, false, 0, 0);
+            gl.enableVertexAttribArray(programInfo.attribLocations.vertexPosition);
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, buffers.colors[colorBufferIndex]);
+            gl.vertexAttribPointer(programInfo.attribLocations.color, 4, gl.FLOAT, false, 0, currentFrame * 16 * 4);
+            gl.enableVertexAttribArray(programInfo.attribLocations.color);
+
+            gl.viewport(x, y, w, h);
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        }
+
+        function updateFPS(now) {
+            frameCount++;
+            if (now - lastFpsUpdate >= fpsUpdateInterval) {
+                const fps = Math.round((frameCount * 1000) / (now - lastFpsUpdate));
+                document.getElementById('fpsCounter').textContent = `FPS: ${fps}`;
+                frameCount = 0;
+                lastFpsUpdate = now;
+            }
+        }
+
+        function render(now) {
+            now *= 0.001;  // Convert to seconds
+            const deltaTime = now - then;
+            then = now;
+
+            gl.clearColor(1.0, 1.0, 1.0, 1.0);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+
+            gl.useProgram(programInfo.program);
+
+            const squareSize = 0.35;
+            drawSquare(gl, programInfo, buffers, 0, 0, 0, gl.canvas.width * squareSize, gl.canvas.height * squareSize); // Bottom-left, gray, 7 Hz
+            drawSquare(gl, programInfo, buffers, 1, gl.canvas.width * (1 - squareSize), 0, gl.canvas.width * squareSize, gl.canvas.height * squareSize); // Bottom-right, gray, 8.7 Hz
+            drawSquare(gl, programInfo, buffers, 2, 0, gl.canvas.height * (1 - squareSize), gl.canvas.width * squareSize, gl.canvas.height * squareSize); // Top-left, gray, 9.8 Hz
+            drawSquare(gl, programInfo, buffers, 3, gl.canvas.width * (1 - squareSize), gl.canvas.height * (1 - squareSize), gl.canvas.width * squareSize, gl.canvas.height * squareSize); // Top-right, gray, 12 Hz
+
+            currentFrame = (currentFrame + 1) % totalFrames;
+
+            updateFPS(now * 1000);  // Convert back to milliseconds for FPS calculation
+
+            requestAnimationFrame(render);
+        }
+
+        function initShaderProgram(gl, vsSource, fsSource) {
+            const vertexShader = loadShader(gl, gl.VERTEX_SHADER, vsSource);
+            const fragmentShader = loadShader(gl, gl.FRAGMENT_SHADER, fsSource);
+
+            const shaderProgram = gl.createProgram();
+            gl.attachShader(shaderProgram, vertexShader);
+            gl.attachShader(shaderProgram, fragmentShader);
+            gl.linkProgram(shaderProgram);
+
+            if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+                console.error('Unable to initialize the shader program: ' + gl.getProgramInfoLog(shaderProgram));
+                return null;
+            }
+
+            return shaderProgram;
+        }
+
+        function loadShader(gl, type, source) {
+            const shader = gl.createShader(type);
+            gl.shaderSource(shader, source);
+            gl.compileShader(shader);
+
+            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                console.error('An error occurred compiling the shaders: ' + gl.getShaderInfoLog(shader));
+                gl.deleteShader(shader);
+                return null;
+            }
+
+            return shader;
+        }
+
+        const classesLen = 4;
+        const coolOffTime = 1.5;
+        
+
+
+        const brainButtons = [];
+
+        for (let i = 1; i <= classesLen; i++) {
+            const id = 'brainButton' + i;
+            const element = document.getElementById(id);
+            if (element) {
+                brainButtons.push(element);
+            }
+            else {
+                alert("Nooooooooooo can't create the array of brain buttons");
+            }
+        }
+        
+        function changeSizes(cca_array){
+            console.log(cca_array)
+            for (let i = 0; i < cca_array.length; i++) {
+                brainButtons[i].style.fontSize = `${90 + Math.min(cca_array[i], 0.04) / 0.04 * 25}px`;
+            }
+        }
+        // function changeSizes(cca_array, T1) {
+        //     console.log(cca_array);
+        //     for (let i = 0; i < cca_array.length; i++) {
+        //         let growthFactor = Math.exp(cca_array[i] / T1);
+        //         brainButtons[i].style.fontSize = `${15 + Math.min(growthFactor, 2) * 10}px`;//Exponential
+               
+        //     }
+        // }
+
+      
+        function preTrigger(index){
+            brainButtons[index].classList.add('preTriggered');
+        }
+
+        function resetAll(){
+            for (let i = 0; i < classesLen; i++){
+                brainButtons[i].classList.remove('preTriggered');
+                brainButtons[i].classList.remove('triggered');
+            }
+        }
+
+        function trigger(index){
+            brainButtons[index].classList.add('triggered');
+            brainButtons[index].classList.remove('preTriggered');
+            setTimeout(resetAll, (coolOffTime+0.1) * 1000);
+        }
+
+        window.onload = () => {
+            initGL();
+
+            // const labels = document.querySelectorAll('.label');
+            // labels.forEach(label => {
+            //     label.addEventListener('mouseover', () => {
+            //         label.classList.add('preTriggered');
+            //         // //label.style.color = 'blue'; // Change to desired color
+            //         // label.style.opacity = '100%';
+            //         // label.style.fontSize = '110px';
+            //         // // label.style.backgroundColor = 'rgba(0, 0, 0, 0.1)'; // Slightly darken background
+            //     });
+            //     label.addEventListener('mouseout', () => {
+            //         //label.style.color = 'white';
+            //         label.classList.remove('preTriggered');
+            //         label.classList.remove('triggered');
+            //         // label.style.backgroundColor = 'transparent';
+            //     });
+            //     label.addEventListener('click', () => {
+            //         label.classList.remove('preTriggered');
+            //         label.classList.add('triggered');
+            //         // label.style.color = 'green';
+            //         // label.style.opacity = '100%';
+            //         // label.style.backgroundColor = 'transparent';
+            //     });
+            // });
+        };
+    </script>
+</body>
+</html>
